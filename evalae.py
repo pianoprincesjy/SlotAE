@@ -25,29 +25,39 @@ from object_centric_bench.utils import Config, build_from_config
 
 class LinearSlotAutoencoder(nn.Module):
     """간단한 선형 변환 autoencoder"""
-    def __init__(self, slot_dim=256):
+    def __init__(self, slot_dim=256, attention_size=256*256):
         super().__init__()
-        self.encoder = nn.Linear(slot_dim * 2, slot_dim)
-        self.decoder = nn.Linear(slot_dim, slot_dim * 2)
+        self.slot_encoder = nn.Linear(slot_dim * 2, slot_dim)
+        self.slot_decoder = nn.Linear(slot_dim, slot_dim * 2)
+        self.attention_decoder = nn.Linear(attention_size, attention_size * 2)
         
     def encode(self, slot1, slot2):
         """두 slot을 하나로 합침"""
         combined = pt.cat([slot1, slot2], dim=-1)
-        return self.encoder(combined)
+        return self.slot_encoder(combined)
     
     def decode(self, encoded_slot):
         """하나의 slot을 두 개로 분리"""
-        decoded = self.decoder(encoded_slot)
+        decoded = self.slot_decoder(encoded_slot)
         slot1_recon = decoded[..., :256]
         slot2_recon = decoded[..., 256:]
         return slot1_recon, slot2_recon
+    
+    def decode_attention(self, attention):
+        decoded = self.attention_decoder(attention)
+        mid = decoded.shape[-1] // 2
+        attention1 = decoded[..., :mid]
+        attention2 = decoded[..., mid:]
+        attention1 = pt.softmax(attention1.view(-1, attention1.shape[-1]), dim=-1)
+        attention2 = pt.softmax(attention2.view(-1, attention2.shape[-1]), dim=-1)
+        return attention1, attention2
 
 
 class NonlinearSlotAutoencoder(nn.Module):
     """비선형 MLP autoencoder"""
-    def __init__(self, slot_dim=256, hidden_dim=512):
+    def __init__(self, slot_dim=256, hidden_dim=512, attention_size=256*256):
         super().__init__()
-        self.encoder = nn.Sequential(
+        self.slot_encoder = nn.Sequential(
             nn.Linear(slot_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -55,7 +65,7 @@ class NonlinearSlotAutoencoder(nn.Module):
             nn.Linear(hidden_dim, slot_dim),
         )
         
-        self.decoder = nn.Sequential(
+        self.slot_decoder = nn.Sequential(
             nn.Linear(slot_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
@@ -63,17 +73,34 @@ class NonlinearSlotAutoencoder(nn.Module):
             nn.Linear(hidden_dim, slot_dim * 2),
         )
         
+        self.attention_decoder = nn.Sequential(
+            nn.Linear(attention_size, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, attention_size * 2),
+        )
+        
     def encode(self, slot1, slot2):
         """두 slot을 하나로 합침"""
         combined = pt.cat([slot1, slot2], dim=-1)
-        return self.encoder(combined)
+        return self.slot_encoder(combined)
     
     def decode(self, encoded_slot):
         """하나의 slot을 두 개로 분리"""
-        decoded = self.decoder(encoded_slot)
+        decoded = self.slot_decoder(encoded_slot)
         slot1_recon = decoded[..., :256]
         slot2_recon = decoded[..., 256:]
         return slot1_recon, slot2_recon
+    
+    def decode_attention(self, attention):
+        decoded = self.attention_decoder(attention)
+        mid = decoded.shape[-1] // 2
+        attention1 = decoded[..., :mid]
+        attention2 = decoded[..., mid:]
+        attention1 = pt.softmax(attention1.view(-1, attention1.shape[-1]), dim=-1)
+        attention2 = pt.softmax(attention2.view(-1, attention2.shape[-1]), dim=-1)
+        return attention1, attention2
 
 
 # ==================== Utility Functions ====================
@@ -112,19 +139,119 @@ def preprocess_image(image_path, target_size=(256, 256)):
     return image_tensor, original
 
 
-def visualize_slots_with_mask(original_image, attention_maps, selected_indices=None, alpha=0.3):
+def add_legend_to_image(image, slot_colors, merge_indices=None, split_index=None, output_indices=None):
     """
-    슬롯들을 원본 이미지 위에 alpha blending으로 시각화
-    selected_indices에 해당하는 슬롯들에 별표 표시
+    원본 이미지 우상단에 legend 추가
+    
+    Args:
+        image: (H, W, 3) numpy array
+        slot_colors: (num_slots, 3) array of RGB colors
+        merge_indices: merge할 슬롯 인덱스들 (tuple)
+        split_index: split할 슬롯 인덱스 (int)
+        output_indices: 결과 슬롯 인덱스들 (list)
+    """
+    img = image.copy()
+    H, W = img.shape[:2]
+    
+    # Legend parameters
+    box_size = 25
+    padding = 15
+    spacing = 8
+    text_height = 20
+    
+    y_offset = padding
+    x_start = W - padding - 200
+    
+    if merge_indices is not None:
+        # "Merge:" label
+        cv2.putText(img, "Merge:", (x_start, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(img, "Merge:", (x_start, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        x_pos = x_start + 60
+        for idx in merge_indices:
+            color = (slot_colors[idx] * 255).astype(np.uint8).tolist()
+            cv2.rectangle(img, (x_pos, y_offset), 
+                         (x_pos + box_size, y_offset + box_size), color, -1)
+            cv2.rectangle(img, (x_pos, y_offset), 
+                         (x_pos + box_size, y_offset + box_size), (0, 0, 0), 2)
+            x_pos += box_size + spacing
+        
+        # Arrow
+        cv2.putText(img, "->", (x_pos, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(img, "->", (x_pos, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        x_pos += 30
+        
+        # Output color (averaged)
+        if output_indices and len(output_indices) > 0:
+            out_idx = output_indices[0]
+            out_color = (slot_colors[out_idx] * 255).astype(np.uint8).tolist()
+            cv2.rectangle(img, (x_pos, y_offset), 
+                         (x_pos + box_size, y_offset + box_size), out_color, -1)
+            cv2.rectangle(img, (x_pos, y_offset), 
+                         (x_pos + box_size, y_offset + box_size), (0, 0, 0), 2)
+    
+    elif split_index is not None:
+        # "Split:" label
+        cv2.putText(img, "Split:", (x_start, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(img, "Split:", (x_start, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        
+        x_pos = x_start + 50
+        color = (slot_colors[split_index] * 255).astype(np.uint8).tolist()
+        cv2.rectangle(img, (x_pos, y_offset), 
+                     (x_pos + box_size, y_offset + box_size), color, -1)
+        cv2.rectangle(img, (x_pos, y_offset), 
+                     (x_pos + box_size, y_offset + box_size), (0, 0, 0), 2)
+        x_pos += box_size + spacing
+        
+        # Arrow
+        cv2.putText(img, "->", (x_pos, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(img, "->", (x_pos, y_offset + 15), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+        x_pos += 30
+        
+        # Output colors (2 new slots)
+        if output_indices:
+            for out_idx in output_indices[:2]:
+                out_color = (slot_colors[out_idx] * 255).astype(np.uint8).tolist()
+                cv2.rectangle(img, (x_pos, y_offset), 
+                             (x_pos + box_size, y_offset + box_size), out_color, -1)
+                cv2.rectangle(img, (x_pos, y_offset), 
+                             (x_pos + box_size, y_offset + box_size), (0, 0, 0), 2)
+                x_pos += box_size + spacing
+    
+    return img
+
+
+def generate_slot_colors(num_slots):
+    """슬롯별 고정 색상 생성"""
+    colors = []
+    for i in range(num_slots):
+        hue = i / num_slots
+        saturation = 1.0
+        value = 1.0
+        from matplotlib.colors import hsv_to_rgb
+        rgb = hsv_to_rgb([hue, saturation, value])
+        colors.append(rgb)
+    return np.array(colors)
+
+
+def visualize_slots_with_mask(original_image, attention_maps, slot_indices, all_colors, alpha=0.5):
+    """
+    Winner-take-all 방식으로 슬롯들을 뚜렷하게 시각화
     
     Args:
         original_image: (H, W, 3) numpy array
         attention_maps: (num_slots, H, W) numpy array
-        selected_indices: 별표를 표시할 슬롯 인덱스 리스트
+        slot_indices: 각 attention map이 어떤 원본 슬롯 인덱스인지 (list)
+        all_colors: 전체 슬롯 색상 배열 (max_slots, 3)
         alpha: blending alpha value
-    
-    Returns:
-        vis_image: 시각화된 이미지 (H, W, 3)
     """
     H, W = attention_maps.shape[1:]
     num_slots = attention_maps.shape[0]
@@ -132,47 +259,22 @@ def visualize_slots_with_mask(original_image, attention_maps, selected_indices=N
     # Resize original image to match attention map size
     orig_resized = cv2.resize(original_image, (W, H))
     
-    # Create colormap for slots
-    colors = plt.cm.hsv(np.linspace(0, 1, num_slots + 1))[:num_slots, :3]
+    # Winner-take-all segmentation
+    max_slot_indices = np.argmax(attention_maps, axis=0)
     
-    # Create visualization
-    vis_image = orig_resized.copy().astype(np.float32) / 255.0
-    
+    # 세그멘테이션 마스크 생성 (원본 색상 유지)
+    segmentation_mask = np.zeros((H, W, 3), dtype=np.float32)
     for i in range(num_slots):
-        mask = attention_maps[i]
-        mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
-        
-        # Apply color mask
-        color_mask = np.zeros((H, W, 3))
+        slot_mask = (max_slot_indices == i)
+        # 원본 슬롯 인덱스의 색상 사용
+        color = all_colors[slot_indices[i]]
         for c in range(3):
-            color_mask[:, :, c] = mask * colors[i, c]
-        
-        # Blend with original
-        vis_image = vis_image * (1 - alpha * mask[..., None]) + color_mask * alpha
+            segmentation_mask[slot_mask, c] = color[c]
     
-    vis_image = np.clip(vis_image * 255, 0, 255).astype(np.uint8)
-    
-    # Add star markers for selected slots
-    if selected_indices is not None:
-        fig, ax = plt.subplots(figsize=(5, 5))
-        ax.imshow(vis_image)
-        ax.axis('off')
-        
-        for idx in selected_indices:
-            # Find center of mass for this slot
-            mask = attention_maps[idx]
-            y_coords, x_coords = np.where(mask > 0.1)
-            if len(x_coords) > 0:
-                cx = int(x_coords.mean())
-                cy = int(y_coords.mean())
-                ax.plot(cx, cy, marker='*', markersize=20, color='yellow', 
-                       markeredgecolor='black', markeredgewidth=2)
-        
-        plt.tight_layout(pad=0)
-        fig.canvas.draw()
-        vis_image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        vis_image = vis_image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-        plt.close(fig)
+    # 원본과 블렌딩
+    overlay_image = orig_resized.astype(np.float32) / 255.0
+    blended = overlay_image * (1 - alpha) + segmentation_mask * alpha
+    vis_image = np.clip(blended * 255, 0, 255).astype(np.uint8)
     
     return vis_image
 
@@ -204,99 +306,124 @@ def visualize_autoencoder_results(original_image, slots, attention_maps, autoenc
     device = slots.device
     num_slots = slots.shape[0]
     
-    # ==================== Row 1: Encoder Test ====================
+    # Generate consistent colors for all slots (including potential new ones)
+    max_possible_slots = num_slots + 2  # Original + potential split outputs
+    all_colors = generate_slot_colors(max_possible_slots)
     
-    # (0, 1): Original slots with encoder pair marked
-    img_01 = visualize_slots_with_mask(
-        original_image, attention_maps, 
-        selected_indices=encoder_pair, alpha=0.3
-    )
+    # ==================== Row 1: Encoder Test ====================
     
     # Encode: merge two slots
     idx1, idx2 = encoder_pair
-    slot1 = slots[idx1:idx1+1]  # (1, slot_dim)
-    slot2 = slots[idx2:idx2+1]  # (1, slot_dim)
+    
+    # Original slots with all original indices
+    original_slot_indices = list(range(num_slots))
+    img_01 = visualize_slots_with_mask(original_image, attention_maps, 
+                                        original_slot_indices, all_colors, alpha=0.5)
+    
+    # Add legend to ORIGINAL image
+    img_00 = add_legend_to_image(original_image, all_colors, 
+                                  merge_indices=encoder_pair, 
+                                  output_indices=[num_slots])  # New merged slot gets next index
+    
+    slot1 = slots[idx1:idx1+1]
+    slot2 = slots[idx2:idx2+1]
+    attention1 = attention_maps[idx1]  # (H, W)
+    attention2 = attention_maps[idx2]
     
     with pt.no_grad():
-        encoded_slot = autoencoder.encode(slot1, slot2)  # (1, slot_dim)
+        encoded_slot = autoencoder.encode(slot1, slot2)
+        
+        # Merge attentions (sum and normalize)
+        H, W = attention1.shape
+        merged_attention_np = attention1 + attention2
+        merged_attention_np = merged_attention_np / (merged_attention_np.sum() + 1e-8)
     
     # Create new slot set with encoded slot
-    # Remove original two slots and add encoded one
     remaining_indices = [i for i in range(num_slots) if i not in encoder_pair]
-    merged_slots = pt.cat([slots[remaining_indices], encoded_slot], dim=0)  # (6, slot_dim)
+    merged_slots = pt.cat([slots[remaining_indices], encoded_slot], dim=0)
     
-    # Note: We can't directly visualize merged_slots without decoder
-    # So we'll just show a placeholder message
-    # In practice, you'd need to pass through decoder to get attention maps
-    # For now, we'll show remaining slots only
-    merged_attention = attention_maps[remaining_indices]
-    img_02 = visualize_slots_with_mask(
-        original_image, merged_attention, 
-        selected_indices=None, alpha=0.3
-    )
+    # For visualization: include merged attention
+    merged_attention_all = np.concatenate([
+        attention_maps[remaining_indices],
+        merged_attention_np[np.newaxis, :, :]  # Add merged attention
+    ], axis=0)
+    merged_slot_indices = remaining_indices + [num_slots]
+    img_02 = visualize_slots_with_mask(original_image, merged_attention_all, 
+                                        merged_slot_indices, all_colors, alpha=0.5)
     
     # ==================== Row 2: Decoder Test ====================
     
-    # (1, 1): Original slots with decoder slot marked
-    img_11 = visualize_slots_with_mask(
-        original_image, attention_maps,
-        selected_indices=[decoder_idx], alpha=0.3
-    )
+    # Original slots
+    img_11 = visualize_slots_with_mask(original_image, attention_maps,
+                                        original_slot_indices, all_colors, alpha=0.5)
+    
+    # Add legend to ORIGINAL image for split
+    img_10 = add_legend_to_image(original_image, all_colors,
+                                  split_index=decoder_idx,
+                                  output_indices=[num_slots, num_slots+1])  # Two new slots
     
     # Decode: split one slot into two
-    slot_to_split = slots[decoder_idx:decoder_idx+1]  # (1, slot_dim)
+    slot_to_split = slots[decoder_idx:decoder_idx+1]
+    attention_to_split = attention_maps[decoder_idx]  # (H, W)
     
     with pt.no_grad():
         slot_recon1, slot_recon2 = autoencoder.decode(slot_to_split)
+        
+        # Split attention using autoencoder
+        H, W = attention_to_split.shape
+        attention_flat = pt.from_numpy(attention_to_split).flatten().unsqueeze(0).to(device)  # (1, H*W)
+        attention_split1, attention_split2 = autoencoder.decode_attention(attention_flat)
+        
+        # Reshape back to spatial
+        attention_split1_np = attention_split1.squeeze(0).cpu().numpy().reshape(H, W)
+        attention_split2_np = attention_split2.squeeze(0).cpu().numpy().reshape(H, W)
     
     # Create new slot set with split slots
     remaining_indices = [i for i in range(num_slots) if i != decoder_idx]
-    split_slots = pt.cat([
-        slots[remaining_indices], 
-        slot_recon1, 
-        slot_recon2
-    ], dim=0)  # (8, slot_dim)
+    split_slots = pt.cat([slots[remaining_indices], slot_recon1, slot_recon2], dim=0)
     
-    # Again, we can't directly visualize without decoder attention
-    # Show remaining + 2 placeholder slots
-    split_attention = attention_maps[remaining_indices]
-    # Add two dummy attention maps (zeros) for the split slots
-    dummy_attention = np.zeros((2, attention_maps.shape[1], attention_maps.shape[2]))
-    split_attention = np.concatenate([split_attention, dummy_attention], axis=0)
+    # For visualization: remaining slots + 2 new decoded attentions
+    split_attention_all = np.concatenate([
+        attention_maps[remaining_indices],
+        attention_split1_np[np.newaxis, :, :],
+        attention_split2_np[np.newaxis, :, :]
+    ], axis=0)
     
-    img_12 = visualize_slots_with_mask(
-        original_image, split_attention,
-        selected_indices=None, alpha=0.3
-    )
+    # Slot indices: remaining keep original, new ones get num_slots, num_slots+1
+    split_slot_indices = remaining_indices + [num_slots, num_slots+1]
+    img_12 = visualize_slots_with_mask(original_image, split_attention_all,
+                                        split_slot_indices, all_colors, alpha=0.5)
     
     # ==================== Create 3x2 Grid ====================
     
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
     # Row 1
-    axes[0, 0].imshow(original_image)
-    axes[0, 0].set_title('Original Image', fontsize=14, fontweight='bold')
+    axes[0, 0].imshow(img_00)
+    axes[0, 0].set_title('Original Image\n(with Merge legend)', fontsize=12, fontweight='bold')
     axes[0, 0].axis('off')
     
     axes[0, 1].imshow(img_01)
-    axes[0, 1].set_title(f'7 Slots (★ slots {idx1}, {idx2})', fontsize=14, fontweight='bold')
+    axes[0, 1].set_title(f'7 Slots (Before Merge)', fontsize=12, fontweight='bold')
     axes[0, 1].axis('off')
     
     axes[0, 2].imshow(img_02)
-    axes[0, 2].set_title(f'After Encoding (6 slots)', fontsize=14, fontweight='bold')
+    axes[0, 2].set_title(f'After Merge: 6 slots\n(Slots {idx1},{idx2} merged with summed attention)', 
+                        fontsize=11, fontweight='bold')
     axes[0, 2].axis('off')
     
     # Row 2
-    axes[1, 0].imshow(original_image)
-    axes[1, 0].set_title('Original Image', fontsize=14, fontweight='bold')
+    axes[1, 0].imshow(img_10)
+    axes[1, 0].set_title('Original Image\n(with Split legend)', fontsize=12, fontweight='bold')
     axes[1, 0].axis('off')
     
     axes[1, 1].imshow(img_11)
-    axes[1, 1].set_title(f'7 Slots (★ slot {decoder_idx})', fontsize=14, fontweight='bold')
+    axes[1, 1].set_title(f'7 Slots (Before Split)', fontsize=12, fontweight='bold')
     axes[1, 1].axis('off')
     
     axes[1, 2].imshow(img_12)
-    axes[1, 2].set_title(f'After Decoding (8 slots)', fontsize=14, fontweight='bold')
+    axes[1, 2].set_title(f'After Split: 8 slots\n(Slot {decoder_idx} split with decoded attention)', 
+                        fontsize=11, fontweight='bold')
     axes[1, 2].axis('off')
     
     plt.tight_layout()

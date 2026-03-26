@@ -2,7 +2,7 @@
 
 **⚠️ This code must be placed in the `slotae/` folder within the [MetaSlot repository](https://github.com/lhj-lhj/MetaSlot/tree/main).**
 
-This code was written within the MetaSlot repository and is fully compatible with its codebase.
+This code was written within the MetaSlot repository.
 
 ## Overview
 
