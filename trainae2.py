@@ -104,7 +104,7 @@ class NonlinearSlotAutoencoder(nn.Module):
 
 # ==================== Training Functions ====================
 
-def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device):
+def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device, save_dir, model_type, batch_size):
     """
     Autoencoder 학습 (slot만)
     
@@ -169,6 +169,17 @@ def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, devic
         
         avg_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
+        
+        # Save checkpoint after each epoch
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': autoencoder.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+        }
+        checkpoint_path = save_dir / f"{model_type}_batch{batch_size}_epoch_{epoch+1:04d}.pth"
+        pt.save(checkpoint, checkpoint_path)
+        print(f"✓ Checkpoint saved: {checkpoint_path}")
     
     return autoencoder
 
@@ -244,8 +255,12 @@ def main():
     num_params = sum(p.numel() for p in autoencoder.parameters())
     print(f"✓ {model_type.capitalize()} autoencoder initialized")
     print(f"  Total parameters: {num_params:,}")
-    
-    # ==================== Train ====================
+        # ==================== Create Save Directory ====================
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = Path(SAVE_DIR) / model_type / timestamp
+    save_dir.mkdir(parents=True, exist_ok=True)
+    print(f"✓ Save directory created: {save_dir}")
+        # ==================== Train ====================
     print(f"\n[4/5] Training for {NUM_EPOCHS} epochs...")
     
     autoencoder = train_autoencoder(
@@ -253,18 +268,16 @@ def main():
         dataloader=dataloader,
         metaslot_model=metaslot_model,
         num_epochs=NUM_EPOCHS,
-        device=device
+        device=device,
+        save_dir=save_dir,
+        model_type=model_type,
+        batch_size=BATCH_SIZE
     )
     
-    # ==================== Save Model ====================
-    print("\n[5/5] Saving model...")
+    # ==================== Save Final Model ====================
+    print("\n[5/5] Saving final model...")
     
-    # Create save directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = Path(SAVE_DIR) / model_type / timestamp
-    save_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Save checkpoint
+    # Save final checkpoint
     checkpoint = {
         'model_state_dict': autoencoder.state_dict(),
         'model_type': model_type,
@@ -275,7 +288,7 @@ def main():
         'learning_rate': LEARNING_RATE,
     }
     
-    save_path = save_dir / "final.pth"
+    save_path = save_dir / f"{model_type}_batch{BATCH_SIZE}_final.pth"
     pt.save(checkpoint, save_path)
     
     print(f"✓ Model saved to: {save_path}")

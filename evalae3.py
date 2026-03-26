@@ -499,7 +499,7 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
 if __name__ == "__main__":
     MODEL_TYPE = "linear"
     
-    model_path = f"/home/jaey00ns/MetaSlot-main/slotae/slotae_linear.pth"
+    model_path = f"/home/jaey00ns/MetaSlot-main/slotae/pth/linear/20260326_055826/final.pth"
     
     test_images = [
         "/home/jaey00ns/MetaSlot-main/imgs/slottest.png",
