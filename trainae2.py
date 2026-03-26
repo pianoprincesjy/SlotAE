@@ -43,7 +43,7 @@ NUM_WORKERS = 16  # 데이터 로딩 병렬 처리 워커 수
 METASLOT_CONFIG = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur_r-coco.py"
 METASLOT_CHECKPOINT = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth"
 DATA_BASE_DIR = "/home/jaey00ns/MetaSlot-main/data"
-SAVE_DIR = "/home/jaey00ns/MetaSlot-main/slotae/pth2"
+SAVE_DIR = "/home/jaey00ns/MetaSlot-main/slotae/pth"
 
 # ==================== Autoencoder Models (Slot Only) ====================
 
@@ -211,7 +211,7 @@ def main():
     print("\n[2/5] Setting up dataloader...")
     
     dataset_config = cfg.dataset_t
-    dataset_config['base_dir'] = DATA_BASE_DIR
+    dataset_config['base_dir'] = Path(DATA_BASE_DIR)
     dataset = build_from_config(dataset_config)
     
     dataloader = DataLoader(
