@@ -3,8 +3,6 @@ Slot Autoencoder Training Script (v2 - Slot Only)
 두 개의 slot을 합치고 다시 분리하는 autoencoder 학습 (attention 학습 제거)
 """
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
-
 import sys
 import torch as pt
 import torch.nn as nn
@@ -14,6 +12,9 @@ from pathlib import Path
 import tqdm
 from itertools import combinations
 from datetime import datetime
+import argparse
+import json
+import matplotlib.pyplot as plt
 
 sys.path.append('/home/jaey00ns/MetaSlot-main')
 from object_centric_bench.model import ModelWrap
@@ -24,33 +25,51 @@ from object_centric_bench.datum import DataLoader
 from models import create_autoencoder, list_available_models, MODEL_CONFIGS
 
 
-# ==================== Hyperparameters ====================
-# 여기서 모든 하이퍼파라미터를 수정하세요
+# ==================== Argument Parsing ====================
 
-# Model Type - models.py의 MODEL_CONFIGS에서 선택
-# 'linear', 'nonlinear_simple', 'nonlinear_medium', 'nonlinear_deep', 'nonlinear_gelu'
-MODEL_CONFIG = 'nonlinear_deep'
-
-# Training Settings
-NUM_EPOCHS = 30
-BATCH_SIZE = 512
-LEARNING_RATE = 1e-3
-
-# Model Architecture
-SLOT_DIM = 256
-
-# Data Loading
-NUM_WORKERS = 16  # 데이터 로딩 병렬 처리 워커 수
-
-# Paths
-METASLOT_CONFIG = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur_r-coco.py"
-METASLOT_CHECKPOINT = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth"
-DATA_BASE_DIR = "/home/jaey00ns/MetaSlot-main/data"
-SAVE_DIR = "/home/jaey00ns/MetaSlot-main/slotae/pth"
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train Slot Autoencoder')
+    
+    # Model
+    parser.add_argument('--model-config', type=str, default='nonlinear_deep',
+                        choices=list(MODEL_CONFIGS.keys()),
+                        help='Model configuration')
+    parser.add_argument('--slot-dim', type=int, default=256,
+                        help='Slot dimension')
+    
+    # Training
+    parser.add_argument('--epochs', type=int, default=30,
+                        help='Number of training epochs')
+    parser.add_argument('--batch-size', type=int, default=512,
+                        help='Batch size')
+    parser.add_argument('--lr', type=float, default=1e-3,
+                        help='Learning rate')
+    parser.add_argument('--num-workers', type=int, default=16,
+                        help='Number of data loading workers')
+    
+    # Paths
+    parser.add_argument('--metaslot-config', type=str,
+                        default='/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur_r-coco.py',
+                        help='MetaSlot config path')
+    parser.add_argument('--metaslot-checkpoint', type=str,
+                        default='/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth',
+                        help='MetaSlot checkpoint path')
+    parser.add_argument('--data-dir', type=str,
+                        default='/home/jaey00ns/MetaSlot-main/data',
+                        help='Data directory')
+    parser.add_argument('--save-dir', type=str,
+                        default='/home/jaey00ns/MetaSlot-main/slotae/pth',
+                        help='Save directory')
+    
+    # Device
+    parser.add_argument('--gpu', type=str, default='5',
+                        help='GPU device ID')
+    
+    return parser.parse_args()
 
 # ==================== Training Functions ====================
 
-def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device, save_dir, model_type, batch_size):
+def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device, save_dir, model_type, batch_size, learning_rate):
     """
     Autoencoder 학습 (slot만)
     
@@ -59,7 +78,14 @@ def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, devic
     - 각 배치에서 모든 21개 쌍에 대해 loss 계산
     """
     autoencoder.train()
-    optimizer = pt.optim.Adam(autoencoder.parameters(), lr=LEARNING_RATE)
+    optimizer = pt.optim.Adam(autoencoder.parameters(), lr=learning_rate)
+    
+    # Loss history 기록
+    loss_history = {
+        'epoch': [],
+        'train_loss': [],
+        'timestamp': []
+    }
     
     # 모든 slot 쌍 생성
     num_slots = 7
@@ -116,6 +142,11 @@ def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, devic
         avg_loss = epoch_loss / num_batches
         print(f"Epoch {epoch+1}/{num_epochs} - Average Loss: {avg_loss:.6f}")
         
+        # Record loss history
+        loss_history['epoch'].append(epoch + 1)
+        loss_history['train_loss'].append(avg_loss)
+        loss_history['timestamp'].append(datetime.now().isoformat())
+        
         # Save checkpoint after each epoch
         checkpoint = {
             'epoch': epoch + 1,
@@ -127,31 +158,61 @@ def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, devic
         pt.save(checkpoint, checkpoint_path)
         print(f"✓ Checkpoint saved: {checkpoint_path}")
     
-    return autoencoder
+    return autoencoder, loss_history
+
+
+def save_loss_history(loss_history, save_path):
+    """Loss history를 JSON으로 저장"""
+    with open(save_path, 'w') as f:
+        json.dump(loss_history, f, indent=2)
+    print(f"✓ Loss history saved: {save_path}")
+
+
+def plot_loss_curve(loss_history, save_path):
+    """Loss curve 시각화"""
+    plt.figure(figsize=(10, 6))
+    plt.plot(loss_history['epoch'], loss_history['train_loss'], 'b-', linewidth=2, label='Train Loss')
+    plt.xlabel('Epoch', fontsize=12)
+    plt.ylabel('Loss', fontsize=12)
+    plt.title('Training Loss Curve', fontsize=14, fontweight='bold')
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=10)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f"✓ Loss curve saved: {save_path}")
 
 
 def main():
+    # Parse arguments
+    args = parse_args()
+    
+    # Set GPU
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    
     device = 'cuda' if pt.cuda.is_available() else 'cpu'
-    print(f"Using device: {device}")
+    print(f"Using device: {device} (GPU: {args.gpu})")
     
     print("\n" + "="*60)
     print("Slot Autoencoder Training (v2 - Slot Only)")
     print("="*60)
-    print(f"Model Config: {MODEL_CONFIG}")
-    print(f"Model Description: {MODEL_CONFIGS[MODEL_CONFIG]['description']}")
-    print(f"Epochs: {NUM_EPOCHS}")
-    print(f"Batch Size: {BATCH_SIZE}")
-    print(f"Learning Rate: {LEARNING_RATE}")
-    print(f"Slot Dim: {SLOT_DIM}")
+    print(f"Model Config: {args.model_config}")
+    print(f"Model Description: {MODEL_CONFIGS[args.model_config]['description']}")
+    print(f"Epochs: {args.epochs}")
+    print(f"Batch Size: {args.batch_size}")
+    print(f"Learning Rate: {args.lr}")
+    print(f"Slot Dim: {args.slot_dim}")
+    print(f"MetaSlot Config: {Path(args.metaslot_config).name}")
+    print(f"MetaSlot Checkpoint: {Path(args.metaslot_checkpoint).name}")
     print("="*60 + "\n")
     
     # ==================== Load MetaSlot (Frozen) ====================
-    print("[1/5] Loading MetaSlot model...")
-    cfg = Config.fromfile(METASLOT_CONFIG)
+    print("[1/6] Loading MetaSlot model...")
+    cfg = Config.fromfile(args.metaslot_config)
     metaslot_model = build_from_config(cfg.model)
     metaslot_model = ModelWrap(metaslot_model, cfg.model_imap, cfg.model_omap)
     
-    state = pt.load(METASLOT_CHECKPOINT, map_location="cpu", weights_only=False)
+    state = pt.load(args.metaslot_checkpoint, map_location="cpu", weights_only=False)
     if "state_dict" in state:
         state = state["state_dict"]
     metaslot_model.load_state_dict(state, strict=False)
@@ -164,17 +225,17 @@ def main():
     print("✓ MetaSlot loaded and frozen")
     
     # ==================== Setup Dataloader ====================
-    print("\n[2/5] Setting up dataloader...")
+    print("\n[2/6] Setting up dataloader...")
     
     dataset_config = cfg.dataset_t
-    dataset_config['base_dir'] = Path(DATA_BASE_DIR)
+    dataset_config['base_dir'] = Path(args.data_dir)
     dataset = build_from_config(dataset_config)
     
     dataloader = DataLoader(
         dataset,
-        batch_size=BATCH_SIZE,
+        batch_size=args.batch_size,
         shuffle=True,
-        num_workers=NUM_WORKERS,
+        num_workers=args.num_workers,
         collate_fn=None,
         drop_last=True
     )
@@ -183,60 +244,82 @@ def main():
     print(f"✓ Dataloader ready: {len(dataloader)} batches per epoch")
     
     # ==================== Initialize Autoencoder ====================
-    print("\n[3/5] Initializing autoencoder...")
+    print("\n[3/6] Initializing autoencoder...")
     
     # Create autoencoder using factory function
-    autoencoder = create_autoencoder(MODEL_CONFIG, slot_dim=SLOT_DIM)
+    autoencoder = create_autoencoder(args.model_config, slot_dim=args.slot_dim)
     autoencoder = autoencoder.to(device)
     
     num_params = sum(p.numel() for p in autoencoder.parameters())
-    print(f"✓ Autoencoder initialized: {MODEL_CONFIG}")
+    print(f"✓ Autoencoder initialized: {args.model_config}")
     print(f"  Total parameters: {num_params:,}")
     
     # ==================== Create Save Directory ====================
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = Path(SAVE_DIR) / MODEL_CONFIG / timestamp
+    save_dir = Path(args.save_dir) / args.model_config / timestamp
     save_dir.mkdir(parents=True, exist_ok=True)
     print(f"✓ Save directory created: {save_dir}")
     
-    # ==================== Train ====================
-    print(f"\n[4/5] Training for {NUM_EPOCHS} epochs...")
+    # Save training config
+    config_dict = vars(args)
+    config_dict['timestamp'] = timestamp
+    config_dict['num_parameters'] = num_params
+    with open(save_dir / 'config.json', 'w') as f:
+        json.dump(config_dict, f, indent=2)
+    print(f"✓ Config saved: {save_dir / 'config.json'}")
     
-    autoencoder = train_autoencoder(
+    # ==================== Train ====================
+    print(f"\n[4/6] Training for {args.epochs} epochs...")
+    
+    autoencoder, loss_history = train_autoencoder(
         autoencoder=autoencoder,
         dataloader=dataloader,
         metaslot_model=metaslot_model,
-        num_epochs=NUM_EPOCHS,
+        num_epochs=args.epochs,
         device=device,
         save_dir=save_dir,
-        model_type=MODEL_CONFIG,
-        batch_size=BATCH_SIZE
+        model_type=args.model_config,
+        batch_size=args.batch_size,
+        learning_rate=args.lr
     )
     
-    # ==================== Save Final Model ====================
-    print("\n[5/5] Saving final model...")
+    # ==================== Save Results ====================
+    print("\n[5/6] Saving results...")
     
     # Save final checkpoint
     checkpoint = {
         'model_state_dict': autoencoder.state_dict(),
-        'model_config': MODEL_CONFIG,
-        'model_description': MODEL_CONFIGS[MODEL_CONFIG]['description'],
-        'slot_dim': SLOT_DIM,
-        'num_epochs': NUM_EPOCHS,
-        'batch_size': BATCH_SIZE,
-        'learning_rate': LEARNING_RATE,
+        'model_config': args.model_config,
+        'model_description': MODEL_CONFIGS[args.model_config]['description'],
+        'slot_dim': args.slot_dim,
+        'num_epochs': args.epochs,
+        'batch_size': args.batch_size,
+        'learning_rate': args.lr,
+        'loss_history': loss_history,
     }
     
-    save_path = save_dir / f"{MODEL_CONFIG}_batch{BATCH_SIZE}_final.pth"
+    save_path = save_dir / f"{args.model_config}_batch{args.batch_size}_final.pth"
     pt.save(checkpoint, save_path)
-    
     print(f"✓ Model saved to: {save_path}")
     
+    # Save loss history
+    loss_path = save_dir / f"{args.model_config}_batch{args.batch_size}_loss_history.json"
+    save_loss_history(loss_history, loss_path)
+    
+    # Plot loss curve
+    plot_path = save_dir / f"{args.model_config}_batch{args.batch_size}_loss_curve.png"
+    plot_loss_curve(loss_history, plot_path)
+    
+    # ==================== Summary ====================
+    print("\n[6/6] Training summary...")
     print("\n" + "="*60)
     print("Training Completed Successfully!")
     print("="*60)
-    print(f"Model: {MODEL_CONFIG}")
+    print(f"Model: {args.model_config}")
+    print(f"Final Loss: {loss_history['train_loss'][-1]:.6f}")
     print(f"Save Path: {save_path}")
+    print(f"Loss History: {loss_path}")
+    print(f"Loss Curve: {plot_path}")
     print("="*60)
 
 
