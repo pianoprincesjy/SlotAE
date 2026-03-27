@@ -20,21 +20,24 @@ from object_centric_bench.model import ModelWrap
 from object_centric_bench.utils import Config, build_from_config
 from object_centric_bench.datum import DataLoader
 
+# Import autoencoder models
+from models import create_autoencoder, list_available_models, MODEL_CONFIGS
+
 
 # ==================== Hyperparameters ====================
 # 여기서 모든 하이퍼파라미터를 수정하세요
 
-# Model Type
-USE_NONLINEAR = False  # True: nonlinear MLP, False: linear
+# Model Type - models.py의 MODEL_CONFIGS에서 선택
+# 'linear', 'nonlinear_simple', 'nonlinear_medium', 'nonlinear_deep', 'nonlinear_gelu'
+MODEL_CONFIG = 'nonlinear_deep'
 
 # Training Settings
-NUM_EPOCHS = 10
-BATCH_SIZE = 256
+NUM_EPOCHS = 20
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
 
 # Model Architecture
 SLOT_DIM = 256
-HIDDEN_DIM = 512  # nonlinear 모델의 hidden layer 크기
 
 # Data Loading
 NUM_WORKERS = 16  # 데이터 로딩 병렬 처리 워커 수
@@ -44,63 +47,6 @@ METASLOT_CONFIG = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur
 METASLOT_CHECKPOINT = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth"
 DATA_BASE_DIR = "/home/jaey00ns/MetaSlot-main/data"
 SAVE_DIR = "/home/jaey00ns/MetaSlot-main/slotae/pth"
-
-# ==================== Autoencoder Models (Slot Only) ====================
-
-class LinearSlotAutoencoder(nn.Module):
-    """간단한 선형 변환 autoencoder (slot만)"""
-    def __init__(self, slot_dim):
-        super().__init__()
-        self.encoder = nn.Linear(slot_dim * 2, slot_dim)
-        self.decoder = nn.Linear(slot_dim, slot_dim * 2)
-        
-    def encode(self, slot1, slot2):
-        """두 slot을 하나로 합침"""
-        combined = pt.cat([slot1, slot2], dim=-1)  # (B, 512)
-        return self.encoder(combined)  # (B, 256)
-    
-    def decode(self, encoded_slot):
-        """하나의 slot을 두 개로 분리"""
-        decoded = self.decoder(encoded_slot)  # (B, 512)
-        slot1_recon = decoded[..., :256]
-        slot2_recon = decoded[..., 256:]
-        return slot1_recon, slot2_recon
-
-
-class NonlinearSlotAutoencoder(nn.Module):
-    """비선형 MLP autoencoder (slot만)"""
-    def __init__(self, slot_dim, hidden_dim):
-        super().__init__()
-        # Slot Encoder: 2*slot_dim -> hidden -> slot_dim
-        self.encoder = nn.Sequential(
-            nn.Linear(slot_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, slot_dim),
-        )
-        
-        # Slot Decoder: slot_dim -> hidden -> 2*slot_dim
-        self.decoder = nn.Sequential(
-            nn.Linear(slot_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, slot_dim * 2),
-        )
-        
-    def encode(self, slot1, slot2):
-        """두 slot을 하나로 합침"""
-        combined = pt.cat([slot1, slot2], dim=-1)
-        return self.encoder(combined)
-    
-    def decode(self, encoded_slot):
-        """하나의 slot을 두 개로 분리"""
-        decoded = self.decoder(encoded_slot)
-        slot1_recon = decoded[..., :256]
-        slot2_recon = decoded[..., 256:]
-        return slot1_recon, slot2_recon
-
 
 # ==================== Training Functions ====================
 
@@ -191,13 +137,12 @@ def main():
     print("\n" + "="*60)
     print("Slot Autoencoder Training (v2 - Slot Only)")
     print("="*60)
-    print(f"Model Type: {'Nonlinear MLP' if USE_NONLINEAR else 'Linear'}")
+    print(f"Model Config: {MODEL_CONFIG}")
+    print(f"Model Description: {MODEL_CONFIGS[MODEL_CONFIG]['description']}")
     print(f"Epochs: {NUM_EPOCHS}")
     print(f"Batch Size: {BATCH_SIZE}")
     print(f"Learning Rate: {LEARNING_RATE}")
     print(f"Slot Dim: {SLOT_DIM}")
-    if USE_NONLINEAR:
-        print(f"Hidden Dim: {HIDDEN_DIM}")
     print("="*60 + "\n")
     
     # ==================== Load MetaSlot (Frozen) ====================
@@ -240,27 +185,21 @@ def main():
     # ==================== Initialize Autoencoder ====================
     print("\n[3/5] Initializing autoencoder...")
     
-    if USE_NONLINEAR:
-        autoencoder = NonlinearSlotAutoencoder(
-            slot_dim=SLOT_DIM,
-            hidden_dim=HIDDEN_DIM
-        )
-        model_type = 'nonlinear'
-    else:
-        autoencoder = LinearSlotAutoencoder(slot_dim=SLOT_DIM)
-        model_type = 'linear'
-    
+    # Create autoencoder using factory function
+    autoencoder = create_autoencoder(MODEL_CONFIG, slot_dim=SLOT_DIM)
     autoencoder = autoencoder.to(device)
     
     num_params = sum(p.numel() for p in autoencoder.parameters())
-    print(f"✓ {model_type.capitalize()} autoencoder initialized")
+    print(f"✓ Autoencoder initialized: {MODEL_CONFIG}")
     print(f"  Total parameters: {num_params:,}")
-        # ==================== Create Save Directory ====================
+    
+    # ==================== Create Save Directory ====================
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = Path(SAVE_DIR) / model_type / timestamp
+    save_dir = Path(SAVE_DIR) / MODEL_CONFIG / timestamp
     save_dir.mkdir(parents=True, exist_ok=True)
     print(f"✓ Save directory created: {save_dir}")
-        # ==================== Train ====================
+    
+    # ==================== Train ====================
     print(f"\n[4/5] Training for {NUM_EPOCHS} epochs...")
     
     autoencoder = train_autoencoder(
@@ -270,7 +209,7 @@ def main():
         num_epochs=NUM_EPOCHS,
         device=device,
         save_dir=save_dir,
-        model_type=model_type,
+        model_type=MODEL_CONFIG,
         batch_size=BATCH_SIZE
     )
     
@@ -280,15 +219,15 @@ def main():
     # Save final checkpoint
     checkpoint = {
         'model_state_dict': autoencoder.state_dict(),
-        'model_type': model_type,
+        'model_config': MODEL_CONFIG,
+        'model_description': MODEL_CONFIGS[MODEL_CONFIG]['description'],
         'slot_dim': SLOT_DIM,
-        'hidden_dim': HIDDEN_DIM if USE_NONLINEAR else None,
         'num_epochs': NUM_EPOCHS,
         'batch_size': BATCH_SIZE,
         'learning_rate': LEARNING_RATE,
     }
     
-    save_path = save_dir / f"{model_type}_batch{BATCH_SIZE}_final.pth"
+    save_path = save_dir / f"{MODEL_CONFIG}_batch{BATCH_SIZE}_final.pth"
     pt.save(checkpoint, save_path)
     
     print(f"✓ Model saved to: {save_path}")
@@ -296,7 +235,7 @@ def main():
     print("\n" + "="*60)
     print("Training Completed Successfully!")
     print("="*60)
-    print(f"Model: {model_type}")
+    print(f"Model: {MODEL_CONFIG}")
     print(f"Save Path: {save_path}")
     print("="*60)
 

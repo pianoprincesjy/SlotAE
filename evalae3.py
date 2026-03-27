@@ -475,7 +475,7 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
         
         original_resized = cv2.resize(original_image, (256, 256))
         
-        encoder_pair = (0, 1)
+        encoder_pair = (0,6)
         decoder_idx = 3
         
         save_path = output_dir / f"{model_name}_img{img_idx:02d}.png"
@@ -499,7 +499,7 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
 if __name__ == "__main__":
     MODEL_TYPE = "linear"
     
-    model_path = f"/home/jaey00ns/MetaSlot-main/slotae/pth/linear/20260326_055826/final.pth"
+    model_path = f"/home/jaey00ns/MetaSlot-main/slotae/pth/nonlinear/20260326_063605/nonlinear_batch256_final.pth"
     
     test_images = [
         "/home/jaey00ns/MetaSlot-main/imgs/slottest.png",
