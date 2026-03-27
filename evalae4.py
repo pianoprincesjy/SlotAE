@@ -1,6 +1,7 @@
 """
-Slot Autoencoder Evaluation Script (v3 - with Slot Attention Refinement)
-새로운 slot을 만든 후, slot attention을 n iterations 반복하여 slot을 refine
+Slot Autoencoder Evaluation Script (v4 - with Decoder attent2)
+새로운 slot을 만든 후, Decoder를 직접 통과시켜 고해상도 attent2 획득
+evalae3의 slot attention refinement 대신 decoder의 mask logit 활용
 """
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "4"
@@ -14,6 +15,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from pathlib import Path
 import cv2
+from einops import rearrange
 
 sys.path.append('/home/jaey00ns/MetaSlot-main')
 from object_centric_bench.model import ModelWrap
@@ -24,19 +26,17 @@ from models import create_autoencoder, list_available_models, MODEL_CONFIGS
 
 
 # ==================== Hyperparameters ====================
-# 여기서 모든 하이퍼파라미터를 수정하세요
 
 # Model Selection
-MODEL_CONFIG = 'nonlinear_deep'  # models.py의 MODEL_CONFIGS에서 선택
-MODEL_PATH = "/home/jaey00ns/MetaSlot-main/slotae/pth/nonlinear_deep/20260326_120618/nonlinear_deep_batch256_final.pth"
+MODEL_CONFIG = 'nonlinear_simple'
+MODEL_PATH = "/home/jaey00ns/MetaSlot-main/slotae/pth/nonlinear/20260326_063605/nonlinear_batch256_final.pth"
 
 # MetaSlot Config
 METASLOT_CONFIG = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur_r-coco.py"
 METASLOT_CHECKPOINT = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth"
 
 # Evaluation Settings
-NUM_SLOT_ATTENTION_ITERS = 3  # Slot attention refinement iterations
-NUM_SAMPLES = 1  # 평가할 이미지 개수
+NUM_SAMPLES = 1
 ENCODER_PAIR = (0, 6)  # merge할 slot pair
 DECODER_IDX = 3  # split할 slot index
 
@@ -46,33 +46,39 @@ TEST_IMAGES = [
 ]
 
 # Output
-OUTPUT_DIR = "/home/jaey00ns/MetaSlot-main/slotae/eval3"
+OUTPUT_DIR = "/home/jaey00ns/MetaSlot-main/slotae/eval4"
 
 
-# ==================== Slot Attention Refinement ====================
+# ==================== Decoder attent2 Generation ====================
 
-def refine_slots_with_aggregat(features, new_slots, model):
+def generate_attent2_from_slots(new_slots, decoder):
     """
-    기존 features로 새로운 slots만 aggregat에 통과
+    Decoder를 통해 slots로부터 고해상도 attent2 직접 생성
     
     Args:
-        features: (B, H*W, C) encoded features (이미 계산된 것 재사용)
-        new_slots: (B, num_slots, slot_dim) new slot initialization
-        model: MetaSlot model
+        new_slots: (B, num_slots, slot_dim) new slots
+        decoder: BroadcastMLPDecoder module
     
     Returns:
-        refined_slots: (B, num_slots, slot_dim)
-        attention: (B, num_slots, H, W) attention maps
+        attent2: (B, num_slots, 256, 256) high-resolution attention maps
+        recon: (B, H*W, C) reconstruction (optional)
     """
-    # aggregat만 실행 (features는 재사용)
-    refined_slots, attention = model.m.aggregat(features, new_slots)
+    # Decoder forward
+    clue = [16, 16]  # MetaSlot feature resolution (h, w)
+    recon, attent2 = decoder(clue, new_slots)
     
-    # attention shape: (B, num_slots, H*W) -> (B, num_slots, H, W)
-    B = features.shape[0]
-    H = W = 16  # MetaSlot feature resolution
-    attention = attention.view(B, -1, H, W)
+    # attent2 shape: (B, N, 16*16=256) - feature map resolution
+    # Reshape to (B, N, 16, 16) then upsample to (B, N, 256, 256)
+    B, N, HW = attent2.shape
+    h = w = 16  # Feature map resolution
     
-    return refined_slots, attention
+    # Reshape to 2D
+    attent2 = rearrange(attent2, "b n (h w) -> b n h w", h=h)
+    
+    # Upsample to 256x256 for visualization
+    attent2 = F.interpolate(attent2, size=(256, 256), mode='bilinear', align_corners=False)
+    
+    return attent2, recon
 
 
 # ==================== Utility Functions ====================
@@ -125,14 +131,14 @@ def generate_slot_colors(num_slots):
 
 
 def visualize_slots_with_mask(original_image, attention_maps, slot_indices, all_colors, alpha=0.5):
-    """Winner-take-all 방식으로 슬롯들을 시각화 (ipynb 방식)"""
+    """Winner-take-all 방식으로 슬롯들을 시각화"""
     H, W = attention_maps.shape[1:]
     num_slots = attention_maps.shape[0]
     
     orig_resized = cv2.resize(original_image, (W, H))
     
-    # Winner-take-all: 각 픽셀에서 가장 높은 attention을 가진 slot
-    max_slot_indices = np.argmax(attention_maps, axis=0)  # (H, W)
+    # Winner-take-all
+    max_slot_indices = np.argmax(attention_maps, axis=0)
     
     # 세그멘테이션 마스크 생성
     segmentation_mask = np.zeros((H, W, 3), dtype=np.float32)
@@ -142,7 +148,7 @@ def visualize_slots_with_mask(original_image, attention_maps, slot_indices, all_
         for c in range(3):
             segmentation_mask[slot_mask, c] = color[c]
     
-    # 원본과 블렌딩 (ipynb와 동일한 방식)
+    # 블렌딩
     overlay_image = orig_resized.astype(np.float32) / 255.0
     blended = (1 - alpha) * overlay_image + alpha * segmentation_mask
     vis_image = np.clip(blended * 255, 0, 255).astype(np.uint8)
@@ -225,10 +231,10 @@ def add_legend_to_image(image, slot_colors, merge_indices=None, split_index=None
 
 # ==================== Main Visualization Function ====================
 
-def visualize_autoencoder_results(original_image, slots, features, metaslot_model, autoencoder,
+def visualize_autoencoder_results(original_image, slots, decoder, autoencoder,
                                   original_attention_output, encoder_pair=(0, 1), decoder_idx=3, save_path=None):
     """
-    Autoencoder + Slot Attention Refinement 결과 시각화
+    Autoencoder + Decoder attent2 결과 시각화
     """
     device = slots.device
     num_slots = slots.shape[0]
@@ -236,6 +242,13 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
     # Generate consistent colors
     max_possible_slots = num_slots + 2
     all_colors = generate_slot_colors(max_possible_slots)
+    
+    print(f"\n{'='*60}")
+    print(f"Processing visualization...")
+    print(f"  Original slots: {num_slots}")
+    print(f"  Encoder pair: {encoder_pair}")
+    print(f"  Decoder index: {decoder_idx}")
+    print(f"{'='*60}\n")
     
     # ==================== Row 1: Encoder (Merge) ====================
     
@@ -252,6 +265,7 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
                                   output_indices=[num_slots])
     
     # Encode slots
+    print(f"[1/2] Merging slots {encoder_pair}...")
     slot1 = slots[idx1:idx1+1]
     slot2 = slots[idx2:idx2+1]
     
@@ -261,32 +275,21 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
         # Create new slot set
         merged_slots = pt.cat([slots[remaining_indices], encoded_slot], dim=0).unsqueeze(0)
         
-        # Refine with slot attention
-        print(f"\n[INFO] Refining {merged_slots.shape[1]} merged slots...")
-        refined_slots, refined_attention = refine_slots_with_aggregat(
-            features, merged_slots, metaslot_model
-        )
+        # 🎯 핵심: Decoder를 통해 attent2 직접 생성!
+        print(f"  → Generating attent2 via decoder for {merged_slots.shape[1]} merged slots...")
+        print(f"  → merged_slots shape: {merged_slots.shape}")
+        attent2_merged, recon_merged = generate_attent2_from_slots(merged_slots, decoder)
         
-        # Upsample attention to 256x256
-        refined_attention_256 = F.interpolate(
-            refined_attention, 
-            size=(256, 256), 
-            mode='bilinear'
-        )
-        refined_attention_256 = refined_attention_256.squeeze(0).cpu().numpy()
+        # attent2는 이미 (B, N, 256, 256) 형태
+        attent2_merged = attent2_merged.squeeze(0).cpu().numpy()
         
-        # Debug: 원본 vs refined attention 비교
-        print(f"[DEBUG] Original attention shape: {original_attention_output.shape}")
-        print(f"[DEBUG] Refined attention shape: {refined_attention_256.shape}")
-        print(f"[DEBUG] Original attention stats - min: {original_attention_output.min():.6f}, max: {original_attention_output.max():.6f}")
-        print(f"[DEBUG] Refined attention stats - min: {refined_attention_256.min():.6f}, max: {refined_attention_256.max():.6f}")
-        
-        # 특정 slot의 attention을 출력
-        print(f"[DEBUG] Original slot 0 - unique values: {len(np.unique(original_attention_output[0]))}")
-        print(f"[DEBUG] Refined merged slot - unique values: {len(np.unique(refined_attention_256[-1]))}")
+        print(f"  → attent2_merged shape: {attent2_merged.shape}")
+        print(f"  → attent2 stats - min: {attent2_merged.min():.6f}, max: {attent2_merged.max():.6f}, mean: {attent2_merged.mean():.6f}")
+        print(f"  → attent2 sum per slot: {[attent2_merged[i].sum()/(256*256) for i in range(attent2_merged.shape[0])]}")
+
     
     merged_slot_indices = remaining_indices + [num_slots]
-    img_02 = visualize_slots_with_mask(original_image, refined_attention_256,
+    img_02 = visualize_slots_with_mask(original_image, attent2_merged,
                                         merged_slot_indices, all_colors, alpha=0.5)
     
     # ==================== Row 2: Decoder (Split) ====================
@@ -300,6 +303,7 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
                                   output_indices=[num_slots, num_slots+1])
     
     # Decode slot
+    print(f"\n[2/2] Splitting slot {decoder_idx}...")
     slot_to_split = slots[decoder_idx:decoder_idx+1]
     
     with pt.no_grad():
@@ -309,22 +313,20 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
         remaining_indices_split = [i for i in range(num_slots) if i != decoder_idx]
         split_slots = pt.cat([slots[remaining_indices_split], slot_recon1, slot_recon2], dim=0).unsqueeze(0)
         
-        # Refine with slot attention
-        print(f"[INFO] Refining {split_slots.shape[1]} split slots...")
-        refined_slots_split, refined_attention_split = refine_slots_with_aggregat(
-            features, split_slots, metaslot_model
-        )
+        # 🎯 핵심: Decoder를 통해 attent2 직접 생성!
+        print(f"  → Generating attent2 via decoder for {split_slots.shape[1]} split slots...")
+        print(f"  → split_slots shape: {split_slots.shape}")
+        attent2_split, recon_split = generate_attent2_from_slots(split_slots, decoder)
         
-        # Upsample attention to 256x256
-        refined_attention_split_256 = F.interpolate(
-            refined_attention_split, 
-            size=(256, 256), 
-            mode='bilinear'
-        )
-        refined_attention_split_256 = refined_attention_split_256.squeeze(0).cpu().numpy()
+        attent2_split = attent2_split.squeeze(0).cpu().numpy()
+        
+        print(f"  → attent2_split shape: {attent2_split.shape}")
+        print(f"  → attent2 stats - min: {attent2_split.min():.6f}, max: {attent2_split.max():.6f}, mean: {attent2_split.mean():.6f}")
+        print(f"  → attent2 sum per slot: {[attent2_split[i].sum()/(256*256) for i in range(attent2_split.shape[0])]}")
+
     
     split_slot_indices = remaining_indices_split + [num_slots, num_slots+1]
-    img_12 = visualize_slots_with_mask(original_image, refined_attention_split_256,
+    img_12 = visualize_slots_with_mask(original_image, attent2_split,
                                         split_slot_indices, all_colors, alpha=0.5)
     
     # ==================== Create 2x3 Grid ====================
@@ -340,7 +342,7 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
     axes[0, 1].axis('off')
     
     axes[0, 2].imshow(img_02)
-    axes[0, 2].set_title(f'After Merge: 6 slots\n(Refined with {NUM_SLOT_ATTENTION_ITERS} iters)', 
+    axes[0, 2].set_title(f'After Merge: 6 slots\n(Decoder attent2)', 
                         fontsize=11, fontweight='bold')
     axes[0, 2].axis('off')
     
@@ -353,7 +355,7 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
     axes[1, 1].axis('off')
     
     axes[1, 2].imshow(img_12)
-    axes[1, 2].set_title(f'After Split: 8 slots\n(Refined with {NUM_SLOT_ATTENTION_ITERS} iters)', 
+    axes[1, 2].set_title(f'After Split: 8 slots\n(Decoder attent2)', 
                         fontsize=11, fontweight='bold')
     axes[1, 2].axis('off')
     
@@ -361,13 +363,13 @@ def visualize_autoencoder_results(original_image, slots, features, metaslot_mode
     
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  Saved visualization to {save_path}")
+        print(f"\n✓ Saved visualization to {save_path}")
     
     plt.close()
 
 
 def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
-    """학습된 autoencoder 평가 (slot attention refinement 포함)"""
+    """학습된 autoencoder 평가 (decoder attent2 방식)"""
     device = 'cuda' if pt.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
     
@@ -384,6 +386,9 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
     metaslot_model.load_state_dict(state, strict=False)
     metaslot_model = metaslot_model.to(device).eval()
     
+    # Extract decoder module
+    decoder = metaslot_model.m.decode
+    
     # Load Autoencoder
     checkpoint = pt.load(model_path, map_location=device, weights_only=False)
     model_config = checkpoint['model_config']
@@ -394,7 +399,7 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
     autoencoder = autoencoder.to(device).eval()
     
     print(f"✓ Loaded {model_config} autoencoder")
-    print(f"✓ Slot attention refinement: {NUM_SLOT_ATTENTION_ITERS} iterations")
+    print(f"✓ Using Decoder attent2 (high-resolution mask logit)")
     
     # ==================== Setup Output Directory ====================
     model_name = Path(model_path).stem
@@ -405,7 +410,9 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
     print(f"\n[2/4] Processing {min(num_samples, len(test_image_paths))} test images...")
     
     for img_idx, image_path in enumerate(test_image_paths[:num_samples]):
-        print(f"\n  Processing image {img_idx + 1}/{num_samples}: {image_path}")
+        print(f"\n{'='*60}")
+        print(f"Image {img_idx + 1}/{num_samples}: {Path(image_path).name}")
+        print(f"{'='*60}")
         
         image_tensor, original_image = preprocess_image(image_path)
         image_tensor = image_tensor.to(device)
@@ -413,28 +420,27 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
         with pt.no_grad():
             batch = {'image': image_tensor}
             
-            # Encode image
-            features = metaslot_model.m.encode_backbone(image_tensor)
-            B, C, H, W = features.shape
-            features = features.flatten(2).transpose(1, 2)
-            
-            features = metaslot_model.m.encode_posit_embed(features)
-            features = metaslot_model.m.encode_project(features)
-            
-            # Get slots
+            # Get slots and original attention
             output = metaslot_model(batch)
             slots = output['slotz'].squeeze(0)
             
-            # Get original attention
+            # Get original attent2 (prefer attent2 over attent)
             if 'attent2' in output:
-                original_attention = output['attent2']
+                original_attention = output['attent2']  # (B, N, H, W)
+                print(f"  Using attent2: {original_attention.shape}")
             elif 'attent' in output:
-                original_attention = output['attent']
+                original_attention = output['attent']  # (B, N, 16, 16)
+                print(f"  Using attent: {original_attention.shape}")
             else:
                 raise ValueError("No attention output found")
             
-            original_attention_256 = F.interpolate(original_attention, size=(256, 256), mode='bilinear')
-            original_attention_256 = original_attention_256.squeeze(0).cpu().numpy()
+            # Always upsample to 256x256 for consistent visualization
+            if original_attention.shape[-1] != 256:
+                print(f"  Upsampling from {original_attention.shape[-2:]} to (256, 256)")
+                original_attention = F.interpolate(original_attention, size=(256, 256), mode='bilinear', align_corners=False)
+            
+            original_attention_256 = original_attention.squeeze(0).cpu().numpy()
+            print(f"  Final original_attention shape: {original_attention_256.shape}")
         
         original_resized = cv2.resize(original_image, (256, 256))
         
@@ -443,8 +449,7 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
         visualize_autoencoder_results(
             original_resized,
             slots,
-            features,
-            metaslot_model,
+            decoder,
             autoencoder,
             original_attention_256,
             encoder_pair=ENCODER_PAIR,
@@ -452,8 +457,10 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
             save_path=save_path
         )
     
-    print(f"\n[3/4] ✓ All visualizations saved to {output_dir}")
-    print(f"\n[4/4] Evaluation completed!")
+    print(f"\n{'='*60}")
+    print(f"[3/4] ✓ All visualizations saved to {output_dir}")
+    print(f"[4/4] Evaluation completed!")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
@@ -468,13 +475,13 @@ if __name__ == "__main__":
                 print(f"Using COCO validation images: {len(TEST_IMAGES)} images")
     
     print("="*60)
-    print("Slot Autoencoder Evaluation (v3 - with Slot Attention)")
+    print("Slot Autoencoder Evaluation (v4 - Decoder attent2)")
     print("="*60)
     print(f"Model Config: {MODEL_CONFIG}")
     print(f"Model Description: {MODEL_CONFIGS[MODEL_CONFIG]['description']}")
     print(f"Model Path: {MODEL_PATH}")
     print(f"Test Images: {len(TEST_IMAGES)}")
-    print(f"Refinement Iterations: {NUM_SLOT_ATTENTION_ITERS}")
+    print(f"Method: Direct decoder attent2 generation")
     print(f"Encoder Pair: {ENCODER_PAIR}")
     print(f"Decoder Index: {DECODER_IDX}")
     print("="*60)

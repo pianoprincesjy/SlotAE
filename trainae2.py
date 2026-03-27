@@ -32,8 +32,8 @@ from models import create_autoencoder, list_available_models, MODEL_CONFIGS
 MODEL_CONFIG = 'nonlinear_deep'
 
 # Training Settings
-NUM_EPOCHS = 20
-BATCH_SIZE = 64
+NUM_EPOCHS = 30
+BATCH_SIZE = 512
 LEARNING_RATE = 1e-3
 
 # Model Architecture
