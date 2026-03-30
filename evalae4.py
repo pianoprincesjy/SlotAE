@@ -28,8 +28,8 @@ from models import create_autoencoder, list_available_models, MODEL_CONFIGS
 # ==================== Hyperparameters ====================
 
 # Model Selection
-MODEL_CONFIG = 'nonlinear_simple'
-MODEL_PATH = "/home/jaey00ns/MetaSlot-main/slotae/pth/nonlinear/20260326_063605/nonlinear_batch256_final.pth"
+MODEL_CONFIG = 'linear'
+MODEL_PATH = "/home/jaey00ns/MetaSlot-main/slotae/pth_coco/linear/20260327_072459/linear_batch64_final.pth"
 
 # MetaSlot Config
 METASLOT_CONFIG = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/dinosaur_r-coco.py"
@@ -38,11 +38,11 @@ METASLOT_CHECKPOINT = "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0
 # Evaluation Settings
 NUM_SAMPLES = 1
 ENCODER_PAIR = (0, 6)  # merge할 slot pair
-DECODER_IDX = 3  # split할 slot index
+DECODER_IDX = 4  # split할 slot index
 
 # Test Images
 TEST_IMAGES = [
-    "/home/jaey00ns/MetaSlot-main/imgs/slottest.png",
+    "/home/jaey00ns/MetaSlot-main/imgs/clevr2.png",
 ]
 
 # Output
@@ -391,7 +391,14 @@ def evaluate_autoencoder(model_path, test_image_paths, num_samples=4):
     
     # Load Autoencoder
     checkpoint = pt.load(model_path, map_location=device, weights_only=False)
-    model_config = checkpoint['model_config']
+    
+    # Handle old checkpoints without model_config (fallback to MODEL_CONFIG global)
+    if 'model_config' not in checkpoint:
+        print(f"⚠️  Warning: 'model_config' not found in checkpoint, using MODEL_CONFIG={MODEL_CONFIG}")
+        model_config = MODEL_CONFIG
+    else:
+        model_config = checkpoint['model_config']
+    
     slot_dim = checkpoint.get('slot_dim', 256)
     
     autoencoder = create_autoencoder(model_config, slot_dim=slot_dim)

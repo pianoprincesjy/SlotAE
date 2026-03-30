@@ -1,35 +1,38 @@
 #!/bin/bash
-# Weekend Experiments - ClevrTex Model (Batch 64, 256, 512)
+# Weekend Experiments - All Combinations
+# 5 models x 3 batch sizes x 2 pretrains = 30 experiments
 
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate ocl
+MODELS=(linear nonlinear_simple nonlinear_medium nonlinear_deep nonlinear_gelu)
+BATCH_SIZES=(64 256 512)
 
-# Batch 64
-python trainae2.py \
-    --model-config nonlinear_deep \
-    --epochs 30 \
-    --batch-size 64 \
-    --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-clevrtex.py \
-    --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-clevrtex/42/0031.pth \
-    --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_clevrtex \
-    --gpu 5
+# COCO experiments
+for MODEL in "${MODELS[@]}"; do
+    for BATCH in "${BATCH_SIZES[@]}"; do
+        echo "========== COCO: ${MODEL} / Batch ${BATCH} =========="
+        python trainae2.py \
+            --model-config ${MODEL} \
+            --epochs 30 \
+            --batch-size ${BATCH} \
+            --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-coco.py \
+            --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth \
+            --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_coco \
+            --gpu 5
+    done
+done
 
-# Batch 256
-python trainae2.py \
-    --model-config nonlinear_deep \
-    --epochs 30 \
-    --batch-size 256 \
-    --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-clevrtex.py \
-    --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-clevrtex/42/0031.pth \
-    --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_clevrtex \
-    --gpu 5
+# ClevrTex experiments
+for MODEL in "${MODELS[@]}"; do
+    for BATCH in "${BATCH_SIZES[@]}"; do
+        echo "========== ClevrTex: ${MODEL} / Batch ${BATCH} =========="
+        python trainae2.py \
+            --model-config ${MODEL} \
+            --epochs 30 \
+            --batch-size ${BATCH} \
+            --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-clevrtex.py \
+            --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-clevrtex/42/0031.pth \
+            --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_clevrtex \
+            --gpu 5
+    done
+done
 
-# Batch 512
-python trainae2.py \
-    --model-config nonlinear_deep \
-    --epochs 30 \
-    --batch-size 512 \
-    --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-clevrtex.py \
-    --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-clevrtex/42/0031.pth \
-    --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_clevrtex \
-    --gpu 5
+echo "All experiments completed!"

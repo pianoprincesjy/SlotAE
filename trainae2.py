@@ -69,7 +69,7 @@ def parse_args():
 
 # ==================== Training Functions ====================
 
-def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device, save_dir, model_type, batch_size, learning_rate):
+def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, device, save_dir, model_type, batch_size, learning_rate, slot_dim=256):
     """
     Autoencoder 학습 (slot만)
     
@@ -153,6 +153,8 @@ def train_autoencoder(autoencoder, dataloader, metaslot_model, num_epochs, devic
             'model_state_dict': autoencoder.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'loss': avg_loss,
+            'model_config': model_type,
+            'slot_dim': slot_dim,
         }
         checkpoint_path = save_dir / f"{model_type}_batch{batch_size}_epoch_{epoch+1:04d}.pth"
         pt.save(checkpoint, checkpoint_path)
@@ -280,7 +282,8 @@ def main():
         save_dir=save_dir,
         model_type=args.model_config,
         batch_size=args.batch_size,
-        learning_rate=args.lr
+        learning_rate=args.lr,
+        slot_dim=args.slot_dim
     )
     
     # ==================== Save Results ====================
