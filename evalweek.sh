@@ -7,14 +7,14 @@ export CUDA_VISIBLE_DEVICES=5
 
 BASE_DIR="/home/jaey00ns/MetaSlot-main/slotae"
 OUTPUT_DIR="${BASE_DIR}/evalweek"
-VIS_DIR="${OUTPUT_DIR}/visualizations"
+VIS_DIR="${OUTPUT_DIR}/visualizations_clevr2"
 
 MODELS=(linear nonlinear_simple nonlinear_medium nonlinear_deep nonlinear_gelu)
 BATCH_SIZES=(64 256 512)
 EPOCHS=(1 5 15 30)  # 30 = final
 
 # Test image
-TEST_IMAGE="/home/jaey00ns/MetaSlot-main/imgs/slottest.png"
+TEST_IMAGE="/home/jaey00ns/MetaSlot-main/imgs/clevr2.png"
 
 # MetaSlot configs
 COCO_CONFIG="/home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-coco.py"
@@ -386,8 +386,8 @@ visualize_autoencoder_results(
     decoder,
     autoencoder,
     original_attention_256,
-    encoder_pair=(0, 6),
-    decoder_idx=3,
+    encoder_pair=(4,7),
+    decoder_idx=0,
     save_path=save_path
 )
 
