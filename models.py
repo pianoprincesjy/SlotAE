@@ -15,6 +15,51 @@ MODEL_CONFIGS = {
         'type': 'linear',
         'description': '단순 선형 변환',
     },
+    'linear_layered_2': {
+        'type': 'linear_layered',
+        'description': '2-layer gradual linear transformation',
+        'num_layers': 2,
+    },
+    'linear_layered_3': {
+        'type': 'linear_layered',
+        'description': '3-layer gradual linear transformation',
+        'num_layers': 3,
+    },
+    'linear_layered_4': {
+        'type': 'linear_layered',
+        'description': '4-layer gradual linear transformation',
+        'num_layers': 4,
+    },
+    'linear_layered_5': {
+        'type': 'linear_layered',
+        'description': '5-layer gradual linear transformation',
+        'num_layers': 5,
+    },
+    'linear_layered_6': {
+        'type': 'linear_layered',
+        'description': '6-layer gradual linear transformation',
+        'num_layers': 6,
+    },
+    'linear_layered_7': {
+        'type': 'linear_layered',
+        'description': '7-layer gradual linear transformation',
+        'num_layers': 7,
+    },
+    'linear_layered_8': {
+        'type': 'linear_layered',
+        'description': '8-layer gradual linear transformation',
+        'num_layers': 8,
+    },
+    'linear_layered_9': {
+        'type': 'linear_layered',
+        'description': '9-layer gradual linear transformation',
+        'num_layers': 9,
+    },
+    'linear_layered_10': {
+        'type': 'linear_layered',
+        'description': '10-layer gradual linear transformation',
+        'num_layers': 10,
+    },
     'nonlinear_simple': {
         'type': 'nonlinear',
         'description': '2-layer MLP',
@@ -165,6 +210,95 @@ class NonlinearSlotAutoencoder(nn.Module):
         return slot1_recon, slot2_recon, encoded
 
 
+class LinearLayeredSlotAutoencoder(nn.Module):
+    """
+    Multi-layer linear autoencoder with gradual dimension reduction
+    각 레이어의 feature도 저장하여 feature-matching loss 계산 가능
+    """
+    def __init__(self, slot_dim=256, num_layers=4):
+        super().__init__()
+        self.slot_dim = slot_dim
+        self.num_layers = num_layers
+        
+        # 차원 계산: 512 -> ... -> 256 (점진적으로 감소)
+        input_dim = slot_dim * 2
+        output_dim = slot_dim
+        
+        # 각 레이어의 차원 계산
+        dims = self._compute_layer_dims(input_dim, output_dim, num_layers)
+        self.encoder_dims = dims
+        self.decoder_dims = dims[::-1]  # 역순
+        
+        # Encoder layers
+        self.encoder_layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.encoder_layers.append(nn.Linear(dims[i], dims[i+1]))
+        
+        # Decoder layers (symmetric)
+        self.decoder_layers = nn.ModuleList()
+        for i in range(num_layers):
+            self.decoder_layers.append(nn.Linear(self.decoder_dims[i], self.decoder_dims[i+1]))
+        
+    def _compute_layer_dims(self, start_dim, end_dim, num_layers):
+        """레이어별 차원 계산 (등간격으로)"""
+        dims = [start_dim]
+        step = (start_dim - end_dim) / num_layers
+        for i in range(1, num_layers):
+            dim = int(start_dim - step * i)
+            dims.append(dim)
+        dims.append(end_dim)
+        return dims
+    
+    def encode(self, slot1, slot2, return_intermediates=False):
+        """
+        두 slot을 하나로 합침
+        return_intermediates=True이면 중간 feature들도 반환
+        """
+        combined = pt.cat([slot1, slot2], dim=-1)
+        
+        intermediates = [combined]
+        x = combined
+        for layer in self.encoder_layers:
+            x = layer(x)
+            intermediates.append(x)
+        
+        if return_intermediates:
+            return x, intermediates
+        return x
+    
+    def decode(self, encoded_slot, return_intermediates=False):
+        """
+        하나의 slot을 두 개로 분리
+        return_intermediates=True이면 중간 feature들도 반환
+        """
+        intermediates = [encoded_slot]
+        x = encoded_slot
+        for layer in self.decoder_layers:
+            x = layer(x)
+            intermediates.append(x)
+        
+        slot1_recon = x[..., :self.slot_dim]
+        slot2_recon = x[..., self.slot_dim:]
+        
+        if return_intermediates:
+            return slot1_recon, slot2_recon, intermediates
+        return slot1_recon, slot2_recon
+    
+    def forward(self, slot1, slot2, return_intermediates=False):
+        """
+        Forward pass
+        return_intermediates=True이면 인코더/디코더 중간 feature들도 반환
+        """
+        if return_intermediates:
+            encoded, enc_intermediates = self.encode(slot1, slot2, return_intermediates=True)
+            slot1_recon, slot2_recon, dec_intermediates = self.decode(encoded, return_intermediates=True)
+            return slot1_recon, slot2_recon, encoded, enc_intermediates, dec_intermediates
+        else:
+            encoded = self.encode(slot1, slot2)
+            slot1_recon, slot2_recon = self.decode(encoded)
+            return slot1_recon, slot2_recon, encoded
+
+
 # ==================== Model Factory ====================
 
 def create_autoencoder(config_name='nonlinear_simple', slot_dim=256):
@@ -172,7 +306,7 @@ def create_autoencoder(config_name='nonlinear_simple', slot_dim=256):
     Autoencoder 모델 생성 팩토리 함수
     
     Args:
-        config_name: MODEL_CONFIGS의 키 (예: 'linear', 'nonlinear_simple', 'nonlinear_deep')
+        config_name: MODEL_CONFIGS의 키 (예: 'linear', 'linear_layered_4', 'nonlinear_simple', 'nonlinear_deep')
         slot_dim: slot의 차원 (기본: 256)
     
     Returns:
@@ -181,6 +315,9 @@ def create_autoencoder(config_name='nonlinear_simple', slot_dim=256):
     Examples:
         >>> # 선형 모델
         >>> model = create_autoencoder('linear', slot_dim=256)
+        
+        >>> # 4-layer 선형 모델 (feature-matching loss 지원)
+        >>> model = create_autoencoder('linear_layered_4', slot_dim=256)
         
         >>> # 간단한 비선형 모델
         >>> model = create_autoencoder('nonlinear_simple', slot_dim=256)
@@ -196,6 +333,12 @@ def create_autoencoder(config_name='nonlinear_simple', slot_dim=256):
     
     if config['type'] == 'linear':
         return LinearSlotAutoencoder(slot_dim=slot_dim)
+    
+    elif config['type'] == 'linear_layered':
+        return LinearLayeredSlotAutoencoder(
+            slot_dim=slot_dim,
+            num_layers=config['num_layers']
+        )
     
     elif config['type'] == 'nonlinear':
         return NonlinearSlotAutoencoder(
@@ -220,7 +363,9 @@ def list_available_models():
         print(f"\n[{name}]")
         print(f"  Type: {config['type']}")
         print(f"  Description: {config['description']}")
-        if config['type'] == 'nonlinear':
+        if config['type'] == 'linear_layered':
+            print(f"  Num layers: {config['num_layers']}")
+        elif config['type'] == 'nonlinear':
             print(f"  Encoder layers: {config['encoder_layers']}")
             print(f"  Decoder layers: {config['decoder_layers']}")
             print(f"  Activation: {config['activation']}")

@@ -1,0 +1,17 @@
+{
+  "model_config": "linear_layered_2",
+  "slot_dim": 256,
+  "epochs": 10,
+  "batch_size": 512,
+  "lr": 0.001,
+  "num_workers": 16,
+  "feature_match_weight": 0.5,
+  "metaslot_config": "/home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-coco.py",
+  "metaslot_checkpoint": "/home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth",
+  "data_dir": "/home/jaey00ns/MetaSlot-main/data",
+  "save_dir": "/home/jaey00ns/MetaSlot-main/slotae/pth_layered_coco",
+  "gpu": "5",
+  "timestamp": "20260331_062416",
+  "num_parameters": 591360,
+  "num_layers": 2
+}
