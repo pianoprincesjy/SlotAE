@@ -45,7 +45,7 @@ METASLOT_CONFIGS = {
     }
 }
 
-TEST_IMAGE = "/home/jaey00ns/MetaSlot-main/imgs/clevr2.png"
+TEST_IMAGE = "/home/jaey00ns/MetaSlot-main/imgs/slottest.png"
 
 # Create output directories
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -487,8 +487,8 @@ def visualize_layered_models():
                         decoder,
                         autoencoder,
                         original_attention_256,
-                        encoder_pair=(4, 7),  # Valid indices for 7 slots (0-6)
-                        decoder_idx=0,
+                        encoder_pair=(0, 7),  # Valid indices for 7 slots (0-6)
+                        decoder_idx=3,
                         save_path=save_path,
                         title_suffix=f"{num_layers} layers - {epoch_label}"
                     )

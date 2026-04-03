@@ -9,21 +9,21 @@ EPOCHS=20
 
 # COCO experiments
 # metaslot-config에 데이터셋 정보가 포함되어 있음 (dinosaur_r-coco.py → COCO 데이터셋 사용)
-echo "=========================================="
-echo "Starting COCO dataset experiments..."
-echo "=========================================="
-for MODEL in "${MODELS[@]}"; do
-    echo "========== COCO: ${MODEL} =========="
-    python trainae_layered.py \
-        --model-config ${MODEL} \
-        --epochs ${EPOCHS} \
-        --batch-size ${BATCH_SIZE} \
-        --feature-match-weight 0.1 \
-        --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-coco.py \
-        --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth \
-        --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_layered_coco \
-        --gpu 5
-done
+# echo "=========================================="
+# echo "Starting COCO dataset experiments..."
+# echo "=========================================="
+# for MODEL in "${MODELS[@]}"; do
+#     echo "========== COCO: ${MODEL} =========="
+#     python trainae_layered.py \
+#         --model-config ${MODEL} \
+#         --epochs ${EPOCHS} \
+#         --batch-size ${BATCH_SIZE} \
+#         --feature-match-weight 0.1 \
+#         --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-coco.py \
+#         --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-coco256/42/0054.pth \
+#         --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_layered_coco \
+#         --gpu 5
+# done
 
 # ClevrTex experiments
 # metaslot-config에 데이터셋 정보가 포함되어 있음 (dinosaur_r-clevrtex.py → ClevrTex 데이터셋 사용)
@@ -41,7 +41,7 @@ for MODEL in "${MODELS[@]}"; do
         --metaslot-config /home/jaey00ns/MetaSlot-main/Config/config-metaslot/dinosaur_r-clevrtex.py \
         --metaslot-checkpoint /home/jaey00ns/MetaSlot-main/save/dinosaur_r-clevrtex/42/0031.pth \
         --save-dir /home/jaey00ns/MetaSlot-main/slotae/pth_layered_clevrtex \
-        --gpu 5
+        --gpu 4
 done
 
 echo ""
